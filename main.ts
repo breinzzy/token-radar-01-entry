@@ -101,11 +101,12 @@ for (const name of shots) {
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
 const fit = radar.fit;
-const chosen = fit.terms[fit.chosen]!;
+const odds = radar.odds;
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live shown)\n` +
-    `token radar: size curve ln(mcap) = ${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} ln(TVL), fit on ${fit.n} priced peers, R2 ${fit.r2.toFixed(3)}, blind miss x${fit.medianFactor.toFixed(2)}\n` +
-    `token radar: kept "${chosen.label}" (pooled blind miss x${chosen.pooled.toFixed(2)}); odds never-list ${Math.round(radar.odds.neverList * 100)}%, hazard ${radar.odds.hazardPerYear}/yr\n` +
-    `token radar: verdicts FARM ${radar.verdicts.FARM}, THIN ${radar.verdicts.THIN}, SKIP ${radar.verdicts.SKIP}; audit ${radar.audit.ranked} + ${radar.audit.hasToken} + ${radar.audit.setAside} = ${radar.audit.total}\n` +
+    `token radar: ln(mcap) = ${fit.coefs.map((c) => c.toFixed(4)).join(' + ')} [${fit.chosenTerms.join(', ')}], fit on ${fit.n} priced peers, R2 ${fit.r2.toFixed(3)}\n` +
+    `token radar: kept "${fit.chosenLabel}" (LOO x${fit.chosen.loo.toFixed(2)}, walk-forward median x${fit.chosen.wfMed.toFixed(2)}, 60/40 x${fit.chosen.wf60.toFixed(2)}); range P25-P75 covers ${Math.round(fit.coverage2575 * 100)}%, P10-P90 ${Math.round(fit.coverage1090 * 100)}%\n` +
+    `token radar: odds logistic on ${odds.n} aged peers, Brier 10-fold ${odds.brier10.toFixed(3)} / walk-forward ${odds.brierWf.toFixed(3)} vs base ${odds.brierBase10.toFixed(3)} / ${odds.brierBaseWf.toFixed(3)}, accuracy ${Math.round(odds.accuracy10 * 100)}%\n` +
+    `token radar: verdicts FARM ${radar.verdicts.FARM}, MARGINAL ${radar.verdicts.MARGINAL}, SKIP ${radar.verdicts.SKIP}; audit ${radar.audit.ranked} + ${radar.audit.hasToken} + ${radar.audit.setAside} = ${radar.audit.total}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
