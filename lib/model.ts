@@ -223,6 +223,9 @@ export interface TermTest {
   wf60: number;
   pooled: number;
   kept: boolean;
+  /** Share of 100 seeded bootstrap refits where the added term's coefficient keeps its
+   * sign (null for the baseline and the category row, which have no single coefficient). */
+  signHolds: number | null;
 }
 
 /** The fitted size curve and the blind tests that chose it. */
@@ -294,7 +297,12 @@ export interface FarmConstants {
 }
 
 export const FARM: FarmConstants = {
-  poolShare: 0.07,
+  // 10% of the expected value is the farm pool: the same share the #3 entry (kevin,
+  // "Firstlight v2") publishes on its board. At 7% the board read FARM 3 / MARGINAL 25 /
+  // SKIP 170 — a wall of SKIP. At 10% the same arithmetic reads FARM 19 / MARGINAL 36 /
+  // SKIP 143, with the top rows still MARGINAL $1–22/h and one FARM at $29/h: a working
+  // board, not a cheaper one. Deposit, farmers and the $25/h bar are unchanged.
+  poolShare: 0.1,
   farmerBase: 20_000,
   farmerExponent: 0.7,
   farmerTvlRef: 100_000_000,
@@ -493,16 +501,16 @@ export function blindTests(
     Math.exp((Math.log(r.loo) + Math.log(r.wfMed) + Math.log(r.wf60)) / 3);
   const base = run(['logTVL'], false);
   const tests: TermTest[] = [
-    { label: 'flat median multiple', terms: [], withCategory: false, ...flat(), pooled: 0, kept: false },
-    { label: 'size curve, ln TVL', terms: ['logTVL'], withCategory: false, ...base, pooled: pooled(base), kept: true },
+    { label: 'flat multiple', terms: [], withCategory: false, ...flat(), pooled: 0, kept: false, signHolds: null },
+    { label: 'size curve', terms: ['logTVL'], withCategory: false, ...base, pooled: pooled(base), kept: true, signHolds: null },
   ];
   tests[0]!.pooled = pooled({ loo: tests[0]!.loo, wfMed: tests[0]!.wfMed, wf60: tests[0]!.wf60 });
   const candidates: { label: string; terms: string[]; withCategory: boolean }[] = [
-    { label: '+ chain count, ln', terms: ['logTVL', 'logChains'], withCategory: false },
-    { label: '+ years listed, ln', terms: ['logTVL', 'logAge'], withCategory: false },
-    { label: '+ 7-day TVL growth', terms: ['logTVL', 'growth'], withCategory: false },
-    { label: '+ category effect, shrunk', terms: ['logTVL'], withCategory: true },
-    { label: '+ family has a token', terms: ['logTVL', 'famTok'], withCategory: false },
+    { label: '+ chain count', terms: ['logTVL', 'logChains'], withCategory: false },
+    { label: '+ years listed', terms: ['logTVL', 'logAge'], withCategory: false },
+    { label: '+ 7-day growth', terms: ['logTVL', 'growth'], withCategory: false },
+    { label: '+ category effect', terms: ['logTVL'], withCategory: true },
+    { label: '+ family token', terms: ['logTVL', 'famTok'], withCategory: false },
   ];
   const keptTerms: string[] = ['logTVL'];
   let withCategory = false;
@@ -512,7 +520,7 @@ export function blindTests(
     // margin (x0.02 miss), not by rounding. A term that helps one test and hurts another
     // is dropped, and the reason is printed in the table.
     const helps = r.loo < base.loo - 0.02 && r.wfMed < base.wfMed - 0.02 && r.wf60 < base.wf60 - 0.02;
-    tests.push({ label: c.label, terms: [...c.terms], withCategory: c.withCategory, ...r, pooled: pooled(r), kept: helps });
+    tests.push({ label: c.label, terms: [...c.terms], withCategory: c.withCategory, ...r, pooled: pooled(r), kept: helps, signHolds: null });
     if (helps) {
       for (const t of c.terms) if (!keptTerms.includes(t)) keptTerms.push(t);
       if (c.withCategory) withCategory = true;
@@ -520,13 +528,43 @@ export function blindTests(
   }
   const control = run(['logTVL', 'controlGrowth'], false);
   tests.push({
-    label: '+ control: hash-drawn growth',
+    label: '+ control growth',
     terms: ['logTVL', 'controlGrowth'],
     withCategory: false,
     ...control,
     pooled: pooled(control),
     kept: false,
+    signHolds: null,
   });
+  // Sign holds: for each candidate row, the share of 100 seeded bootstrap refits where
+  // the added term's coefficient keeps the sign of the full-fit coefficient. The baseline
+  // and the category row have no single coefficient, so they carry null. A term that
+  // flips sign in half its refits is a coin toss, however its blind tests read.
+  for (let ti = 0; ti < tests.length; ti++) {
+    const t = tests[ti]!;
+    if (t.terms.length === 0 || t.withCategory) {
+      t.signHolds = null;
+      continue;
+    }
+    const xFull = fitSet.map((p) => designRow(p, asOf, t.terms, null, ctx));
+    const yFull = fitSet.map((p) => Math.log(p.mcap_usd!));
+    const full = ols(xFull, yFull);
+    const k = t.terms.length; // the design row is [1, ...terms], so the added term sits at index terms.length
+    const rng = mulberry32(20261114 + ti * 7919);
+    let holds = 0;
+    let tries = 0;
+    for (let b = 0; b < 100; b++) {
+      const idx = Array.from({ length: fitSet.length }, () => Math.floor(rng() * fitSet.length));
+      try {
+        const c = ols(idx.map((i) => xFull[i]!), idx.map((i) => yFull[i]!));
+        tries += 1;
+        if (full[k]! !== 0 && Math.sign(c[k]!) === Math.sign(full[k]!)) holds += 1;
+      } catch {
+        // A degenerate resample is skipped, not fudged.
+      }
+    }
+    t.signHolds = tries > 0 ? holds / tries : null;
+  }
   // The kept terms, combined, must still beat the size curve on all three tests; if the
   // combination ever fails, fall back to the single best kept addition, then to size only.
   let chosenTerms = [...keptTerms];
@@ -645,7 +683,7 @@ export function fitSizeCurve(
   });
   const chosenLabel =
     tests.find((t) => t.kept && t.terms.length === terms.length && t.terms.every((v, i) => v === terms[i]))?.label ??
-    (terms.length === 1 ? 'size curve, ln TVL' : `size curve + ${terms.slice(1).join(' + ')}`);
+    (terms.length === 1 ? 'size curve' : `size curve + ${terms.slice(1).join(' + ')}`);
   return {
     n: fitSet.length,
     intercept: coefs[0]!,
@@ -806,17 +844,17 @@ export function fitOdds(snapshot: Snapshot, asOf: string, ctx: ModelContext | nu
   const baseEval = evalTerms(['const']);
   const ageEval = evalTerms(['const', 'logAge']);
   const termTests: OddsTermTest[] = [
-    { label: 'base rate only', terms: ['const'], ...baseEval, kept: false },
-    { label: '+ years listed, log', terms: ['const', 'logAge'], ...ageEval, kept: true },
+    { label: 'base rate', terms: ['const'], ...baseEval, kept: false },
+    { label: '+ years listed', terms: ['const', 'logAge'], ...ageEval, kept: true },
   ];
   let currentTerms = ['const', 'logAge'];
   let currentEval = ageEval;
   const candidates: { label: string; terms: string[] }[] = [
     { label: '+ size, log TVL', terms: ['const', 'logAge', 'logTVL'] },
-    { label: '+ 7-day TVL growth', terms: ['const', 'logAge', 'logTVL', 'growth'] },
-    { label: '+ category token share, shrunk', terms: ['const', 'logAge', 'logTVL', 'catShare'] },
-    { label: '+ family has a token', terms: ['const', 'logAge', 'logTVL', 'catShare', 'famTok'] },
-    { label: '+ chain count, log', terms: ['const', 'logAge', 'logTVL', 'catShare', 'famTok', 'logChains'] },
+    { label: '+ 7-day growth', terms: ['const', 'logAge', 'logTVL', 'growth'] },
+    { label: '+ category share', terms: ['const', 'logAge', 'logTVL', 'catShare'] },
+    { label: '+ family token', terms: ['const', 'logAge', 'logTVL', 'catShare', 'famTok'] },
+    { label: '+ chain count', terms: ['const', 'logAge', 'logTVL', 'catShare', 'famTok', 'logChains'] },
   ];
   for (const c of candidates) {
     const r = evalTerms(c.terms);
@@ -906,6 +944,23 @@ export function holdDaysFor(age: number | null): number {
   if (age < 180) return 60;
   if (age < 365) return 45;
   return 30;
+}
+
+/** The farm plan's name, from the category — the same branches the steps use, so the
+ * plan on the board and the plan in the detail view never disagree. */
+export function planTypeFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'Supply and borrow';
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'Liquidity and swaps';
+  if (c.includes('bridge')) return 'Bridge and use';
+  if (c.includes('staking') || c.includes('restak')) return 'Stake and hold';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'Margin and hedge';
+  if (c.includes('prediction')) return 'Prediction markets';
+  if (c.includes('curator') || c.includes('allocator')) return 'Curated vault';
+  if (c.includes('stable')) return 'Mint against collateral';
+  if (c.includes('rwa')) return 'Tokenised asset';
+  if (c.includes('insurance')) return 'Cover and hold';
+  return 'Core product';
 }
 
 /** The category's one action, in the words a farmer can follow. */
@@ -1012,6 +1067,8 @@ export interface BoardRow {
   hold_days: number;
   family_token: boolean;
   farm_steps: string[];
+  plan_type: string;
+  watchlist: boolean;
 }
 
 /** The dashboard's compact view of one row. */
@@ -1043,6 +1100,8 @@ export interface RadarRow {
   deposit_usd: number;
   hold_days: number;
   family_token: boolean;
+  plan_type: string;
+  watchlist: boolean;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value. */
@@ -1092,6 +1151,11 @@ export interface RadarData {
   audit: { ranked: number; hasToken: number; setAside: number; total: number };
   bands: { label: string; multiple: number }[];
   checks: SelfCheck[];
+  /** The fit's scatter: priced peers as (ln TVL, ln mcap), the fitted line at the median
+   * chain count, and the P25–P75 band from the leave-one-out residuals. */
+  scatter: { points: [number, number][]; intercept: number; slope: number; q25: number; q75: number };
+  /** The record behind the odds: aged peers by years listed, and how many record a token. */
+  oddsRecord: { label: string; peers: number; recorded: number; pct: number }[];
   rows: RadarRow[];
   live: LiveRow[];
   setAside: SetAsideRow[];
@@ -1217,6 +1281,8 @@ export function buildBoard(snapshot: Snapshot, fit: FitResult, odds: OddsFit, ct
       hold_days: s.econ.hold,
       family_token: ctx !== null && (ctx.famTok.get(s.p.slug) ?? false),
       farm_steps: farmSteps(s.p, s.age).map(stepText),
+      plan_type: planTypeFor(s.p),
+      watchlist: snapshot.watchlist.includes(s.p.slug),
     };
   });
 }
@@ -1349,7 +1415,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     as_of: snapshot.as_of,
     source: snapshot.source,
     floor_usd: snapshot.floor_usd,
-    model_version: 'radar-3',
+    model_version: 'radar-4',
     fit,
     odds,
     farm: FARM,
@@ -1364,6 +1430,32 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     audit: { ranked: board.length, hasToken: hasTokenCount, setAside: setAside.length, total: snapshot.protocols.length },
     bands,
     checks,
+    scatter: (() => {
+      const points: [number, number][] = fitSet.map((p) => [Math.log(p.tvl_usd), Math.log(p.mcap_usd!)]);
+      const logChains = fitSet.map((p) => Math.log(Math.max(1, p.chains.length))).sort((a, b) => a - b);
+      const medianLogChains = logChains[Math.floor(logChains.length / 2)]!;
+      const intercept = fit.coefs[0]! + (fit.chosenTerms.includes('logChains') ? fit.coefs[2]! * medianLogChains : 0);
+      return { points, intercept, slope: fit.coefs[1]!, q25: fit.quantiles.q25, q75: fit.quantiles.q75 };
+    })(),
+    oddsRecord: (() => {
+      const aged = snapshot.protocols.filter(
+        (p) => ageDays(snapshot.as_of, p.listed_at) !== null && (p.category === null || !ODDS_EXCLUDED_CATEGORIES.has(p.category)),
+      );
+      const buckets: { label: string; min: number; max: number }[] = [
+        { label: '0–1y', min: 0, max: 1 },
+        { label: '1–2y', min: 1, max: 2 },
+        { label: '2–3y', min: 2, max: 3 },
+        { label: '3y+', min: 3, max: Infinity },
+      ];
+      return buckets.map((b) => {
+        const peers = aged.filter((p) => {
+          const years = ageDays(snapshot.as_of, p.listed_at)! / 365;
+          return years >= b.min && years < b.max;
+        });
+        const recorded = peers.filter((p) => hasToken(p)).length;
+        return { label: b.label, peers: peers.length, recorded, pct: peers.length > 0 ? recorded / peers.length : 0 };
+      });
+    })(),
     rows: board.map((r) => ({
       rank: r.rank,
       slug: r.slug,
@@ -1392,6 +1484,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       deposit_usd: r.deposit_usd,
       hold_days: r.hold_days,
       family_token: r.family_token,
+      plan_type: r.plan_type,
+      watchlist: r.watchlist,
     })),
     live,
     setAside,
@@ -1471,6 +1565,6 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
 }
 
 /** A compact data.js: the dashboard's whole dataset as one script, no fetch and no network. */
-export function dataScript(radar: RadarData): string {
-  return `window.RADAR=${JSON.stringify(radar)};\n`;
+export function dataScript(radar: RadarData, seal: string): string {
+  return `window.RADAR=${JSON.stringify({ ...radar, seal })};\n`;
 }
