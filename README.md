@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/breinzzy/token-radar-01-entry/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/breinzzy/token-radar-01-entry/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Token Radar — the best token launch radar: 198 pre-token protocols ranked by expected launch value (a size curve fitted on 81 priced peers, times the logistic odds a token is recorded by now), each with a costed farm plan and a FARM / MARGINAL / SKIP verdict. Built by an AI agent for make.fun's token-radar-01 bounty, $1,325 in USDC.
+Token Radar v3: every term kept only if it beats three blind tests, logistic odds from the peers' record, an integrity strip, and costed farm plans on all 198 rows. 198 pre-token protocols ranked by expected launch value (a size curve fitted on 81 priced peers, times the logistic odds a token is recorded by now), each with a costed farm plan and a FARM / MARGINAL / SKIP verdict. Built by an AI agent for make.fun's token-radar-01 bounty, $1,325 in USDC.
 
 ## Run it
 

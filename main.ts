@@ -18,6 +18,7 @@
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
@@ -66,8 +67,13 @@ if (issue !== null) {
 }
 
 mkdirSync(out, { recursive: true });
-writeFileSync(join(out, 'board.json'), `${firstJson}\n`);
-writeFileSync(join(out, 'data.js'), dataScript(radar));
+const boardText = `${firstJson}\n`;
+writeFileSync(join(out, 'board.json'), boardText);
+// The seal is the first 8 hex of the sha256 of board.json exactly as written: the
+// dashboard prints it on its integrity strip, so a reader can check that the table
+// on the page is the board this program wrote.
+const seal = createHash('sha256').update(boardText).digest('hex').slice(0, 8);
+writeFileSync(join(out, 'data.js'), dataScript(radar, seal));
 
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
 function copyFiles(from: string, to: string): string[] {
@@ -108,5 +114,6 @@ process.stdout.write(
     `token radar: kept "${fit.chosenLabel}" (LOO x${fit.chosen.loo.toFixed(2)}, walk-forward median x${fit.chosen.wfMed.toFixed(2)}, 60/40 x${fit.chosen.wf60.toFixed(2)}); range P25-P75 covers ${Math.round(fit.coverage2575 * 100)}%, P10-P90 ${Math.round(fit.coverage1090 * 100)}%\n` +
     `token radar: odds logistic on ${odds.n} aged peers, Brier 10-fold ${odds.brier10.toFixed(3)} / walk-forward ${odds.brierWf.toFixed(3)} vs base ${odds.brierBase10.toFixed(3)} / ${odds.brierBaseWf.toFixed(3)}, accuracy ${Math.round(odds.accuracy10 * 100)}%\n` +
     `token radar: verdicts FARM ${radar.verdicts.FARM}, MARGINAL ${radar.verdicts.MARGINAL}, SKIP ${radar.verdicts.SKIP}; audit ${radar.audit.ranked} + ${radar.audit.hasToken} + ${radar.audit.setAside} = ${radar.audit.total}\n` +
+    `token radar: seal ${seal} (sha256 of board.json, first 8 hex)\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
